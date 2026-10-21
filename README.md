@@ -1,36 +1,27 @@
 # RAG-Knowledge-Base
 
-A simple command-line RAG (retrieval) tool that searches team knowledge across Confluence, Jira, and local Markdown files. It does not call an LLM: it loads documents, splits them into chunks, and returns the chunks most similar to your query.
+A knowledge retrieval and RAG system that searches team knowledge across Confluence, Jira, and local Markdown files.
 
-## How it works
+The project provides two implementations:
+1. **`rag_loader.py`**: Fast, lightweight command-line retrieval tool using TF-IDF and character n-grams without requiring an LLM or GPU.
+2. **`enterprise_rag.py`**: Full RAG pipeline powered by LangChain, local Ollama embeddings (`nomic-embed-text`), Chroma vector store, and a local LLM (`gemma4:12b`).
 
-1. **Load** documents from:
+---
+
+## 1. Lightweight Search (`rag_loader.py`)
+
+Searches documents and returns the most relevant chunks using lexical similarity (TF-IDF + cosine similarity).
+
+### How it works
+1. **Load**:
    - Confluence pages (HTML converted to text with BeautifulSoup)
    - Jira issues (Atlassian Document Format converted to text)
-   - Local `.md` files (recursive, `.git` skipped)
-2. **Chunk** each document by paragraph/heading, around 800 characters per chunk.
-3. **Retrieve** with TF-IDF over character n-grams (2-4) and cosine similarity. Character n-grams work for languages without spaces between words, such as Thai.
-4. **Print** the top-k chunks with their score and source (URL or file path).
+   - Local `.md` files
+2. **Chunk**: Paragraph/heading based chunks (~800 chars).
+3. **Retrieve**: TF-IDF over character n-grams (2-4), which works well for non-space-delimited languages such as Thai.
+4. **Print**: Top-k matching chunks with similarity score and source URL/filepath.
 
-Matching is lexical, not semantic, so it works best when the query shares keywords with the documents.
-
-## Setup
-
-Requires [uv](https://docs.astral.sh/uv/).
-
-```bash
-uv sync
-```
-
-Create a `.env` file (already git-ignored) for Atlassian access:
-
-```env
-ATLASSIAN_URL=https://your-domain.atlassian.net
-ATLASSIAN_USERNAME=you@example.com
-ATLASSIAN_API_TOKEN=your-api-token
-```
-
-## Usage
+### Usage
 
 ```bash
 # Markdown files only (no Atlassian credentials needed)
@@ -52,21 +43,63 @@ uv run python rag_loader.py "query" --confluence-space DEV --jira-jql "project =
 | `--no-atlassian` | off | Skip Confluence and Jira |
 | `-k` | `3` | Number of results |
 
-## Reading the output
+---
 
+## 2. Enterprise RAG Pipeline (`enterprise_rag.py`)
+
+A generative Q&A pipeline that indexes documents into a vector database and uses an LLM to formulate grounded answers.
+
+### How it works
+1. **Load**: Uses the custom `ConfluenceLoader` and `JiraLoader` from `atlassian_loaders.py`, plus LangChain's `TextLoader` for Markdown. Jira issues are filtered by project and status (`JiraProject` / `JiraStatus` enums).
+2. **Chunk**: Splits documents with `RecursiveCharacterTextSplitter` (chunk size: 1000, overlap: 100).
+3. **Embed & Index**: Uses `OllamaEmbeddings` (`nomic-embed-text`) stored in a local `Chroma` vector store.
+4. **Generate**: Queries a local Ollama LLM (`gemma4:12b`) through an LCEL RAG chain to produce answers in Thai/English grounded in the context.
+
+### Prerequisites for Enterprise RAG
+Make sure [Ollama](https://ollama.ai/) is installed and running, then pull the required models:
+
+```bash
+ollama pull nomic-embed-text
+ollama pull gemma4:12b
 ```
-Loaded 12 documents
 
---- 0.482 | https://your-domain.atlassian.net/wiki/spaces/DEV/pages/123
-<first 500 characters of the matching chunk>
+> **Note:** Embeddings require a dedicated embedding model such as `nomic-embed-text`. Chat models like `gemma4:12b` do not support embeddings (the server returns HTTP 501).
+
+### Usage
+
+```bash
+uv run python enterprise_rag.py
 ```
 
-Each result shows `--- <score> | <source>` followed by the chunk text. The score is cosine similarity: the closer to 1, the better the match. If Atlassian cannot be reached, a `[warn]` line is printed and the search continues with Markdown files.
+---
 
-## Project layout
+## Setup & Configuration
+
+Requires [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+```
+
+Create a `.env` file in the project root with your Atlassian credentials:
+
+```env
+ATLASSIAN_URL=https://your-domain.atlassian.net
+ATLASSIAN_USERNAME=your-email@example.com
+ATLASSIAN_API_TOKEN=your-atlassian-api-token
+```
+
+> **Note:** For `enterprise_rag.py`, make sure to adjust `space_key`, `JiraProject`, and `JiraStatus` in the script to match your Confluence space and Jira project keys if needed.
+
+---
+
+## Project Layout
 
 | File | Purpose |
 | --- | --- |
-| `rag_loader.py` | Loaders, chunking, retriever, and CLI |
-| `architecture.md` | Sample system architecture document used as search content |
+| `enterprise_rag.py` | Full LangChain RAG pipeline with Chroma vector database and Ollama (`gemma4:12b` + `nomic-embed-text`) |
+| `atlassian_loaders.py` | Confluence and Jira document loaders |
+| `rag_loader.py` | Lightweight TF-IDF document loader, chunker, and CLI search tool |
+| `architecture.md` | Sample system architecture document used as local Markdown context |
+| `.env` | Environment configuration for Atlassian API credentials (git-ignored) |
 | `pyproject.toml`, `uv.lock` | Dependencies managed by uv |
